@@ -1736,6 +1736,19 @@ public class CandlepinPoolManager implements PoolManager {
             }
         }
 
+        Set<String> pids1 = new HashSet<String>(getPoolIds(poolsToLock));
+
+        log.info("ABOUT TO LOCK {} POOLS: {}", poolsToLock.size(), pids1);
+        log.info("HOPEFULLY NOT LOCKING ON: {}", alreadyDeletedPools);
+
+        pids1.retainAll(alreadyDeletedPools != null ? alreadyDeletedPools : new HashSet<String>());
+
+        log.info("OVERLAP: {}", pids1);
+
+        if (!pids1.isEmpty()) {
+            log.info("UH OH, WE'RE GONNA LOCK ON A POOL THAT DOESN'T EXIST!");
+        }
+
         poolCurator.lockAndLoad(poolsToLock);
         log.info("Batch revoking {} entitlements ", entsToRevoke.size());
         entsToRevoke = new ArrayList<Entitlement>(entsToRevoke);

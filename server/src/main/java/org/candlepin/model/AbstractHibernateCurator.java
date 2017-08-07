@@ -105,8 +105,6 @@ public abstract class AbstractHibernateCurator<E extends Persisted> {
     private static Logger log = LoggerFactory.getLogger(AbstractHibernateCurator.class);
 
     public AbstractHibernateCurator(Class<E> entityType) {
-        //entityType = (Class<E>) ((ParameterizedType)
-        //getClass().getGenericSuperclass()).getActualTypeArguments()[0];
         this.entityType = entityType;
     }
 
@@ -1086,6 +1084,46 @@ public abstract class AbstractHibernateCurator<E extends Persisted> {
                     E entity = (E) context.getEntity(key);
 
                     if (entity != null) {
+                        log.info("IS ENTITY IN DB CHECK: {}", context.getEntry(entity).isExistsInDatabase());
+
+                        if (!context.getEntry(entity).isExistsInDatabase()) {
+                            log.warn("WARNING! ENTITY IS NOT IN THE DATABASE: {}", entity);
+                            log.warn("REFRESH WILL LIKELY FAIL!");
+                        }
+
+                        if (entity instanceof Pool) {
+                            log.info("ENTITY IS A POOL; CHECKING SOURCE SUB BITS");
+                            SourceSubscription ssentity = ((Pool) entity).getSourceSubscription();
+                            log.info("POOL SOURCE SUB: {}", ssentity);
+
+                            if (ssentity != null) {
+                                ClassMetadata ssmetadata = session.getFactory().getClassMetadata(SourceSubscription.class);
+                                EntityPersister sspersister = session.getFactory().getEntityPersister(ssmetadata.getEntityName());
+
+                                EntityKey sskey = session.generateEntityKey(ssentity.getId(), sspersister);
+                                SourceSubscription fetched = (SourceSubscription) context.getEntity(sskey);
+
+                                if (fetched == null) {
+                                    log.warn("POOL HAS A SOURCE SUB, BUT WE CANNOT FETCH IT FROM THE CONTEXT!");
+                                    log.warn("WE WILL PROBABLY CRASH WHILE REFRESHING");
+                                }
+                                else {
+                                    log.info("SOURCE SUB FOUND IN CONTEXT. CHECKING IF IT IS IN THE DB");
+                                    log.info("IS IN DB? {}", context.getEntry(ssentity).isExistsInDatabase());
+
+                                    if (!context.getEntry(ssentity).isExistsInDatabase()) {
+                                        log.warn("SOURCE SUB IS NOT IN THE DB?? THIS IS BAD; WE WILL PROBABLY CRASH DURING REFRESH");
+                                    }
+                                    else {
+                                        log.warn("SOURCE SUB IS IN THE DB! EVERYTHING IS FINE FOR THIS POOL... probably");
+                                    }
+                                }
+                            }
+                            else {
+                                log.info("POOL DOES NOT HAVE A SOURCE SUB; NOTHING TO CHECK HERE.");
+                            }
+                        }
+
                         entitySet.put(id, entity);
                     }
                     else {
@@ -1103,6 +1141,7 @@ public abstract class AbstractHibernateCurator<E extends Persisted> {
             // work.
             if (entitySet.size() > 0) {
                 for (E entity : entitySet.values()) {
+                    log.info("REFRESHING WITH LOCK: {}", entity);
                     entityManager.refresh(entity, LockModeType.PESSIMISTIC_WRITE);
                     result.add(entity);
                 }
