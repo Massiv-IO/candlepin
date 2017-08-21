@@ -62,7 +62,7 @@ public class CertificateTranslator extends TimestampedEntityTranslator<Certifica
         dest.setCert(source.getCert());
 
         if (translator != null) {
-            dest.setSerial(translator.<CertificateSerial, CertificateSerialDTO>translate(source.getSerial()));
+            dest.setSerial(translator.translate(source.getSerial(), CertificateSerialDTO.class));
         }
         else {
             dest.setSerial(null);
@@ -70,4 +70,5 @@ public class CertificateTranslator extends TimestampedEntityTranslator<Certifica
 
         return dest;
     }
+
 }

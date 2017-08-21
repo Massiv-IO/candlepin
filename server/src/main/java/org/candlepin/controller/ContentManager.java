@@ -14,12 +14,17 @@
  */
 package org.candlepin.controller;
 
+import org.candlepin.dto.ModelTranslator;
+import org.candlepin.dto.api.v1.ContentDTO;
+import org.candlepin.dto.api.v1.ProductDTO;
+import org.candlepin.dto.api.v1.ProductDTO.ProductContentDTO;
 import org.candlepin.model.Content;
 import org.candlepin.model.ContentCurator;
 import org.candlepin.model.Owner;
 import org.candlepin.model.OwnerContent;
 import org.candlepin.model.OwnerContentCurator;
 import org.candlepin.model.Product;
+import org.candlepin.model.ProductContent;
 import org.candlepin.model.ProductCurator;
 import org.candlepin.model.dto.ContentData;
 import org.candlepin.model.dto.ProductData;
@@ -60,56 +65,58 @@ public class ContentManager {
     private OwnerContentCurator ownerContentCurator;
     private ProductCurator productCurator;
     private ProductManager productManager;
+    private ModelTranslator translator;
 
     @Inject
     public ContentManager(
         ContentCurator contentCurator, EntitlementCertificateGenerator entitlementCertGenerator,
         OwnerContentCurator ownerContentCurator, ProductCurator productCurator,
-        ProductManager productManager) {
+        ProductManager productManager, ModelTranslator translator) {
 
         this.contentCurator = contentCurator;
         this.entitlementCertGenerator = entitlementCertGenerator;
         this.ownerContentCurator = ownerContentCurator;
         this.productCurator = productCurator;
         this.productManager = productManager;
+        this.translator = translator;
     }
 
     /**
      * Creates a new Content for the given owner, using the data in the provided DTO.
      *
-     * @param contentData
+     * @param dto
      *  A content DTO representing the content to create
      *
      * @param owner
      *  The owner for which to create the content
      *
      * @throws IllegalArgumentException
-     *  if contentData is null or incomplete, or owner is null
+     *  if dto is null or incomplete, or owner is null
      *
      * @throws IllegalStateException
-     *  if the contentData represents content that already exists
+     *  if the dto represents content that already exists
      *
      * @return
      *  a new Content instance representing the specified content for the given owner
      */
-    public Content createContent(ContentData contentData, Owner owner) {
-        if (contentData == null) {
-            throw new IllegalArgumentException("contentData is null");
+    public Content createContent(ContentDTO dto, Owner owner) {
+        if (dto == null) {
+            throw new IllegalArgumentException("dto is null");
         }
 
-        if (contentData.getId() == null || contentData.getType() == null || contentData.getLabel() == null ||
-            contentData.getName() == null || contentData.getVendor() == null) {
-            throw new IllegalArgumentException("contentData is incomplete");
+        if (dto.getId() == null || dto.getType() == null || dto.getLabel() == null || dto.getName() == null ||
+            dto.getVendor() == null) {
+            throw new IllegalArgumentException("dto is incomplete");
         }
 
-        if (this.ownerContentCurator.contentExists(owner, contentData.getId())) {
-            throw new IllegalStateException("content has already been created: " + contentData.getId());
+        if (this.ownerContentCurator.contentExists(owner, dto.getId())) {
+            throw new IllegalStateException("content has already been created: " + dto.getId());
         }
 
         // TODO: more validation here...?
 
-        Content entity = new Content(contentData.getId());
-        this.applyContentChanges(entity, contentData);
+        Content entity = new Content(dto.getId());
+        this.applyContentChanges(entity, dto);
 
         log.debug("Creating new content for org: {}, {}", entity, owner);
 
@@ -157,7 +164,7 @@ public class ContentManager {
      *  the updated content entity, or a new content entity
      */
     @Transactional
-    public Content updateContent(ContentData update, Owner owner, boolean regenerateEntitlementCerts) {
+    public Content updateContent(ContentDTO update, Owner owner, boolean regenerateEntitlementCerts) {
         if (update == null) {
             throw new IllegalArgumentException("update is null");
         }
@@ -188,7 +195,9 @@ public class ContentManager {
         }
 
         // Make sure we actually have a change to apply
-        if (!entity.isChangedBy(update)) {
+
+        // TODO: Remove this shim and stop using DTOs in this class
+        if (!this.isChangedBy(entity, updateData)) {
             return entity;
         }
 
@@ -213,20 +222,19 @@ public class ContentManager {
                     Collections.<String, String>singletonMap(entity.getUuid(), alt.getUuid()));
 
                 log.debug("Updating {} affected products", affectedProducts.size());
-                ContentData cdata = updated.toDTO();
+                ContentDTO cdto = this.translator.translate(alt, ContentDTO.class);
 
+                // TODO: Should we bulk this up like we do in importContent? Probably.
                 for (Product product : affectedProducts) {
-                    ProductData pdata = product.toDTO();
                     log.debug("Updating affected product: {}", product);
+                    ProductDTO pdto = this.translator.translate(product, ProductDTO.class);
 
-                    // We're taking advantage of the mutable nature of our joining objects.
-                    // Probably not the best idea for long-term maintenance, but it works for now.
-                    ProductContentData pcd = pdata.getProductContent(updated.getId());
-                    if (pcd != null) {
-                        pcd.setContent(cdata);
+                    ProductContentDTO pcdto = pdto.getProductContent(cdto.getId());
+                    if (pcdto != null) {
+                        pdto.addContent(cdto, pcdto.isEnabled());
 
                         // Impl note: This should also take care of our entitlement cert regeneration
-                        this.productManager.updateProduct(pdata, owner, regenerateEntitlementCerts);
+                        this.productManager.updateProduct(pdto, owner, regenerateEntitlementCerts);
                     }
                 }
 
@@ -274,22 +282,20 @@ public class ContentManager {
 
         // Impl note:
         // This block is a consequence of products and contents not being strongly related.
-        log.debug("Updating affected products");
+        log.debug("Updating {} affected products", affectedProducts.size());
+        ContentDTO cdto = this.translator.translate(updated, ContentDTO.class);
 
-        ContentData cdata = updated.toDTO();
-
+        // TODO: Should we bulk this up like we do in importContent? Probably.
         for (Product product : affectedProducts) {
             log.debug("Updating affected product: {}", product);
+            ProductDTO pdto = this.translator.translate(product, ProductDTO.class);
 
-            // We're taking advantage of the mutable nature of our joining objects.
-            // Probably not the best idea for long-term maintenance, but it works for now.
-            ProductData pdata = product.toDTO();
-            ProductContentData pcd = pdata.getProductContent(updated.getId());
-            if (pcd != null) {
-                pcd.setContent(cdata);
+            ProductContentDTO pcdto = pdto.getProductContent(cdto.getId());
+            if (pcdto != null) {
+                pdto.addContent(cdto, pcdto.isEnabled());
 
                 // Impl note: This should also take care of our entitlement cert regeneration
-                this.productManager.updateProduct(pdata, owner, regenerateEntitlementCerts);
+                this.productManager.updateProduct(pdto, owner, regenerateEntitlementCerts);
             }
         }
 
@@ -472,21 +478,28 @@ public class ContentManager {
             affectedProductsContent.putAll(updatedContent);
 
             Map<String, ProductData> affectedProductData = new HashMap<String, ProductData>();
+            Map<String, ContentData> contentDTOCache = new HashMap<String, ContentData>();
+
             for (Product product : affectedProducts) {
-                ProductData productData = product.toDTO();
+                ProductData pdto = product.toDTO();
 
-                for (ProductContentData pcd : productData.getProductContent()) {
-                    ContentData cdata = pcd.getContent();
-                    Content content = updatedContent.get(cdata.getId());
+                for (ProductContent pcdata : product.getProductContent()) {
+                    Content content = pcdata.getContent();
+                    Content updated = updatedContent.get(content.getId());
 
-                    if (content != null) {
-                        // We're taking advantage of the mutable nature of our joining objects.
-                        // Probably not the best idea for long-term maintenance, but it works for now.
-                        pcd.setContent(content.toDTO());
+                    if (updated != null) {
+                        ContentData cdto = contentDTOCache.get(content.getId());
+
+                        if (cdto == null) {
+                            cdto = content.toDTO();
+                            contentDTOCache.put(cdto.getId(), cdto);
+                        }
+
+                        pdto.addContent(cdto, pcdata.isEnabled());
                     }
                 }
 
-                affectedProductData.put(productData.getId(), productData);
+                affectedProductData.put(pdto.getId(), pdto);
             }
 
             // Perform a micro-import for these products using the content map we just built
@@ -643,18 +656,18 @@ public class ContentManager {
                 // instead of pulling down the content list for each product...)
                 Map<String, ProductData> affectedProductData = new HashMap<String, ProductData>();
                 for (Product product : affectedProducts) {
-                    ProductData pdata = product.toDTO();
+                    ProductData pdto = product.toDTO();
 
-                    Iterator<ProductContentData> pcd = pdata.getProductContent().iterator();
+                    Iterator<ProductContentData> pcd = pdto.getProductContent().iterator();
                     while (pcd.hasNext()) {
-                        ContentData cdata = pcd.next().getContent();
+                        ContentData cdto = pcd.next().getContent();
 
-                        if (!affectedProductsContent.containsKey(cdata.getId())) {
+                        if (!affectedProductsContent.containsKey(cdto.getId())) {
                             pcd.remove();
                         }
                     }
 
-                    affectedProductData.put(pdata.getId(), pdata);
+                    affectedProductData.put(pdto.getId(), pdto);
                 }
 
                 // Perform a micro-import for these products using the content map we just built
@@ -670,6 +683,81 @@ public class ContentManager {
             // Remove content references
             this.ownerContentCurator.removeOwnerContentReferences(owner, contentUuids);
         }
+    }
+
+    /**
+     * Applies the changes from the given DTO to the specified entity
+     *
+     * @param entity
+     *  The entity to modify
+     *
+     * @param update
+     *  The DTO containing the modifications to apply
+     *
+     * @throws IllegalArgumentException
+     *  if entity, update or owner is null
+     *
+     * @return
+     *  The updated product entity
+     */
+    private Content applyContentChanges(Content entity, ContentDTO update) {
+        if (entity == null) {
+            throw new IllegalArgumentException("entity is null");
+        }
+
+        if (update == null) {
+            throw new IllegalArgumentException("update is null");
+        }
+
+        if (update.getType() != null) {
+            entity.setType(update.getType());
+        }
+
+        if (update.getLabel() != null) {
+            entity.setLabel(update.getLabel());
+        }
+
+        if (update.getName() != null) {
+            entity.setName(update.getName());
+        }
+
+        if (update.getVendor() != null) {
+            entity.setVendor(update.getVendor());
+        }
+
+        if (update.getContentUrl() != null) {
+            entity.setContentUrl(update.getContentUrl());
+        }
+
+        if (update.getRequiredTags() != null) {
+            entity.setRequiredTags(update.getRequiredTags());
+        }
+
+        if (update.getReleaseVersion() != null) {
+            entity.setReleaseVersion(update.getReleaseVersion());
+        }
+
+        if (update.getGpgUrl() != null) {
+            entity.setGpgUrl(update.getGpgUrl());
+        }
+
+        if (update.getMetadataExpiration() != null) {
+            entity.setMetadataExpire(update.getMetadataExpiration());
+        }
+
+        if (update.getModifiedProductIds() != null) {
+            entity.setModifiedProductIds(update.getModifiedProductIds());
+        }
+
+        if (update.getArches() != null) {
+            entity.setArches(update.getArches());
+        }
+
+        if (update.isLocked() != null) {
+            entity.setLocked(update.isLocked());
+        }
+
+        return entity;
     }
 
     /**

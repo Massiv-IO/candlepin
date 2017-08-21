@@ -405,6 +405,7 @@ public class Product extends AbstractHibernateObject implements SharedEntity, Li
         return new ProductData(this);
     }
 
+
     /**
      * Retrieves this product's object/database UUID. While the product ID may exist multiple times
      * in the database (if in use by multiple owners), this UUID uniquely identifies a
@@ -742,6 +743,7 @@ public class Product extends AbstractHibernateObject implements SharedEntity, Li
 
         boolean changed = false;
         boolean matched = false;
+        String contentId = productContent.getContent().getId();
         Collection<ProductContent> remove = new LinkedList<ProductContent>();
 
         // We're operating under the assumption that we won't be doing janky things like
@@ -749,12 +751,10 @@ public class Product extends AbstractHibernateObject implements SharedEntity, Li
         for (ProductContent pcd : this.productContent) {
             Content cd = pcd.getContent();
 
-            if (cd != null && cd.getId() != null && cd.getId().equals(productContent.getContent().getId())) {
+            if (cd != null && contentId.equals(cd.getId())) {
                 matched = true;
 
-                if (pcd.isEnabled() != productContent.isEnabled() ||
-                    !cd.equals(productContent.getContent())) {
-
+                if (!pcd.equals(productContent)) {
                     remove.add(pcd);
                 }
             }
@@ -1060,9 +1060,17 @@ public class Product extends AbstractHibernateObject implements SharedEntity, Li
             // Impl note: We can't use .equals here on the collections, as Hibernate's special
             // collections explicitly state that they break the contract on .equals. As such, we
             // have to step through each collection and do a manual comparison. Ugh.
-            equals = equals &&
-                Util.collectionsAreEqual(this.dependentProductIds, that.dependentProductIds) &&
-                Util.collectionsAreEqual(this.productContent, that.productContent);
+            equals = equals && Util.collectionsAreEqual(this.dependentProductIds, that.dependentProductIds);
+
+            // Compare content UUIDs
+            equals = equals && Util.collectionsAreEqual(this.productContent, that.productContent,
+                new Comparator<ProductContent>() {
+                    public int compare(ProductContent pc1, ProductContent pc2) {
+                        // We're assuming the collections are well-formed and won't contain null
+                        // objects, but we'll verify that just in case they do.
+                        return pc1 == pc2 || (pc1 != null && pc1.equals(pc2)) ? 0 : 1;
+                    }
+                });
         }
 
         return equals;
@@ -1119,6 +1127,8 @@ public class Product extends AbstractHibernateObject implements SharedEntity, Li
 
         return builder.toHashCode();
     }
+
+    // TODO: Maybe remove these isChangedBy methods and move them to the translation bits?
 
     /**
      * Determines whether or not this entity would be changed if the given DTO were applied to this

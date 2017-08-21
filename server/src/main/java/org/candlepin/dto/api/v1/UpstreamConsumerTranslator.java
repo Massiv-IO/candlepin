@@ -70,9 +70,8 @@ public class UpstreamConsumerTranslator extends
 
         // Process nested objects if we have a ModelTranslator to use to the translation...
         if (translator != null) {
-            dest.setConsumerType(translator.<ConsumerType, ConsumerTypeDTO>translate(source.getType()));
-            dest.setIdentityCertificate(
-                translator.<Certificate, CertificateDTO>translate((Certificate) source.getIdCert()));
+            dest.setConsumerType(translator.translate(source.getType(), ConsumerTypeDTO.class));
+            dest.setIdentityCertificate(translator.translate(source.getIdCert(), CertificateDTO.class));
         }
         else {
             dest.setConsumerType(null);
